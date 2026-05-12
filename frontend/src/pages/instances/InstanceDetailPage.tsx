@@ -23,6 +23,45 @@ const RUNTIME_BURST_WINDOW_MS = 15000;
 const METRIC_WINDOW_MS = 5 * 60 * 1000;
 const INSTANCE_SKILL_PAGE_SIZE = 5;
 
+const supportsRuntimeWorkspace = (type: string) =>
+  type === "openclaw" || type === "hermes";
+
+const supportsRuntimeSkillManagement = (type: string) =>
+  type === "openclaw" || type === "hermes";
+
+const runtimeWorkspaceDirectory = (type: string) =>
+  type === "hermes" ? ".hermes" : ".openclaw";
+
+const runtimeProductName = (type: string) =>
+  type === "hermes" ? "Hermes" : "OpenClaw";
+
+// describeOpenClawError extracts a user-facing message from an axios error.
+// When the server returned a structured JSON body it surfaces the `error`
+// field; otherwise it falls back to the HTTP status (e.g. plain-HTML 413
+// from nginx) or the raw error message.
+function describeOpenClawError(
+  err: any,
+  t: (key: string, variables?: Record<string, string | number>) => string,
+): string {
+  const data = err?.response?.data;
+  if (typeof data === "string" && data.trim() !== "") {
+    // Strip HTML tags so nginx's default error page is not dumped verbatim.
+    const stripped = data.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    if (stripped !== "") return stripped;
+  }
+  if (data && typeof data === "object" && typeof data.error === "string") {
+    return data.error;
+  }
+  const status = err?.response?.status;
+  if (status === 413) {
+    return t("instances.openClawArchiveTooLarge");
+  }
+  if (typeof status === "number") {
+    return `HTTP ${status}`;
+  }
+  return err?.message || "unknown error";
+}
+
 type TimelineItem = {
   id: string;
   title: string;
@@ -503,37 +542,67 @@ const InstanceDetailPage: React.FC = () => {
     }
   };
 
-  const handleExportOpenClaw = async () => {
+  const handleExportWorkspace = async () => {
     if (!instance) return;
 
+    const directory = runtimeWorkspaceDirectory(instance.type);
+    const runtime = runtimeProductName(instance.type);
+
     try {
-      setActionLoading("export-openclaw");
-      const blob = await instanceService.exportOpenClawWorkspace(instance.id);
+      setActionLoading("export-workspace");
+      const blob =
+        instance.type === "hermes"
+          ? await instanceService.exportHermesWorkspace(instance.id)
+          : await instanceService.exportOpenClawWorkspace(instance.id);
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${instance.name || "openclaw-workspace"}.openclaw.tar.gz`;
+      link.download = `${instance.name || `${instance.type}-workspace`}${directory}.tar.gz`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(err.response?.data?.error || t("instances.exportOpenClaw"));
+      alert(
+        t("instances.exportRuntimeWorkspaceFailed", {
+          runtime,
+          directory,
+          message: describeOpenClawError(err, t),
+        }),
+      );
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handleImportOpenClaw = async (file?: File | null) => {
+  const handleImportWorkspace = async (file?: File | null) => {
     if (!instance || !file) return;
 
+    const directory = runtimeWorkspaceDirectory(instance.type);
+    const runtime = runtimeProductName(instance.type);
+
     try {
-      setActionLoading("import-openclaw");
-      await instanceService.importOpenClawWorkspace(instance.id, file);
+      setActionLoading("import-workspace");
+      if (instance.type === "hermes") {
+        await instanceService.importHermesWorkspace(instance.id, file);
+      } else {
+        await instanceService.importOpenClawWorkspace(instance.id, file);
+      }
       await fetchRuntime(instance.id, { background: true });
-      alert(t("instances.importOpenClaw"));
+      alert(
+        t("instances.importRuntimeWorkspaceSuccess", {
+          runtime,
+          directory,
+        }),
+      );
     } catch (err: any) {
-      alert(err.response?.data?.error || t("instances.importOpenClaw"));
+      alert(
+        t("instances.importRuntimeWorkspaceFailed", {
+          runtime,
+          directory,
+          message: describeOpenClawError(err, t),
+        }),
+      );
     } finally {
       if (importInputRef.current) {
         importInputRef.current.value = "";
@@ -702,7 +771,7 @@ const InstanceDetailPage: React.FC = () => {
                   />
                   {t(`status.${effectiveInstanceStatus}`)}
                 </span>
-                <span className="rounded-full border border-[#ead8cf] bg-[#fffaf7] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#8f776b]">
+                <span className="rounded-full border border-[#dbe4f0] bg-[#f8fbff] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#8f776b]">
                   {instance.type}
                 </span>
                 <span className="text-sm text-[#7a6d66]">
@@ -769,7 +838,7 @@ const InstanceDetailPage: React.FC = () => {
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.48fr)_470px] 2xl:grid-cols-[minmax(0,1.55fr)_520px]">
           <div className="space-y-6">
-            <section className="overflow-hidden rounded-[34px] border border-[#ead8cf] bg-[linear-gradient(180deg,#fbf5ef_0%,#f6ece4_100%)] p-3 shadow-[0_34px_90px_-62px_rgba(72,44,24,0.5)]">
+            <section className="overflow-hidden rounded-[34px] border border-[#dbe4f0] bg-[linear-gradient(180deg,#fbf5ef_0%,#f6ece4_100%)] p-3 shadow-[0_34px_90px_-62px_rgba(30,64,175,0.5)]">
               <div className="relative">
                 <InstanceAccess
                   instanceId={instance.id}
@@ -790,7 +859,7 @@ const InstanceDetailPage: React.FC = () => {
               </div>
             </section>
 
-            {instance.type === "openclaw" && (
+            {supportsRuntimeWorkspace(instance.type) && (
               <section className="app-panel px-5 py-5">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="max-w-xl">
@@ -798,27 +867,33 @@ const InstanceDetailPage: React.FC = () => {
                       {t("instances.workspaceSection")}
                     </p>
                     <h2 className="mt-2 text-[1.35rem] font-semibold tracking-[-0.03em] text-[#1d1713]">
-                      {t("instances.openClawWorkspace")}
+                      {t("instances.runtimeWorkspace", {
+                        runtime: runtimeProductName(instance.type),
+                      })}
                     </h2>
                     <p className="mt-2 text-sm leading-6 text-[#7a6d66]">
-                      {t("instances.openClawWorkspaceDesc")}
+                      {t("instances.runtimeWorkspaceDesc", {
+                        directory: runtimeWorkspaceDirectory(instance.type),
+                      })}
                     </p>
                   </div>
 
                   <div className="grid w-full gap-3 lg:max-w-[320px]">
                     <button
                       type="button"
-                      onClick={handleExportOpenClaw}
+                      onClick={handleExportWorkspace}
                       disabled={
                         effectiveInstanceStatus !== "running" ||
-                        actionLoading === "export-openclaw" ||
-                        actionLoading === "import-openclaw"
+                        actionLoading === "export-workspace" ||
+                        actionLoading === "import-workspace"
                       }
                       className="app-button-primary disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {actionLoading === "export-openclaw"
-                        ? t("instances.exportingOpenClaw")
-                        : t("instances.exportOpenClaw")}
+                      {actionLoading === "export-workspace"
+                        ? t("instances.exportingRuntimeWorkspace")
+                        : t("instances.exportRuntimeWorkspace", {
+                            directory: runtimeWorkspaceDirectory(instance.type),
+                          })}
                     </button>
                     <input
                       ref={importInputRef}
@@ -826,7 +901,7 @@ const InstanceDetailPage: React.FC = () => {
                       accept=".tar.gz,.tgz,application/gzip,application/x-gzip,application/octet-stream"
                       className="hidden"
                       onChange={(e) =>
-                        handleImportOpenClaw(e.target.files?.[0] || null)
+                        handleImportWorkspace(e.target.files?.[0] || null)
                       }
                     />
                     <button
@@ -834,14 +909,16 @@ const InstanceDetailPage: React.FC = () => {
                       onClick={() => importInputRef.current?.click()}
                       disabled={
                         effectiveInstanceStatus !== "running" ||
-                        actionLoading === "export-openclaw" ||
-                        actionLoading === "import-openclaw"
+                        actionLoading === "export-workspace" ||
+                        actionLoading === "import-workspace"
                       }
                       className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {actionLoading === "import-openclaw"
-                        ? t("instances.importingOpenClaw")
-                        : t("instances.importOpenClaw")}
+                      {actionLoading === "import-workspace"
+                        ? t("instances.importingRuntimeWorkspace")
+                        : t("instances.importRuntimeWorkspace", {
+                            directory: runtimeWorkspaceDirectory(instance.type),
+                          })}
                     </button>
                   </div>
                 </div>
@@ -901,7 +978,7 @@ const InstanceDetailPage: React.FC = () => {
               </div>
             </section>
 
-            {instance.type === "openclaw" && (
+            {supportsRuntimeSkillManagement(instance.type) && (
               <section className="app-panel px-6 py-6">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                   <div>
@@ -937,7 +1014,7 @@ const InstanceDetailPage: React.FC = () => {
                 </div>
                 <div className="mt-5 space-y-3">
                   {instanceSkills.length === 0 ? (
-                    <div className="rounded-[22px] border border-dashed border-[#e7d9d1] bg-[#fffaf7] px-5 py-6 text-sm text-[#7a6d66]">
+                    <div className="rounded-[22px] border border-dashed border-[#e7d9d1] bg-[#f8fbff] px-5 py-6 text-sm text-[#7a6d66]">
                       {t("instances.noSkillsReported")}
                     </div>
                   ) : (
@@ -945,7 +1022,7 @@ const InstanceDetailPage: React.FC = () => {
                       {paginatedInstanceSkills.map((item) => (
                         <div
                           key={`${item.skill_id}-${item.id}`}
-                          className="rounded-[22px] border border-[#efe2d8] bg-[#fffaf7] px-5 py-4 shadow-[0_20px_40px_-36px_rgba(72,44,24,0.42)]"
+                          className="rounded-[22px] border border-[#efe2d8] bg-[#f8fbff] px-5 py-4 shadow-[0_20px_40px_-36px_rgba(30,64,175,0.42)]"
                         >
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div>
@@ -953,10 +1030,10 @@ const InstanceDetailPage: React.FC = () => {
                                 <span className="text-base font-semibold text-[#1d1713]">
                                   {item.skill?.name || t("instances.skillFallback", { id: item.skill_id })}
                                 </span>
-                                <span className="rounded-full border border-[#ead8cf] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8f776b]">
+                                <span className="rounded-full border border-[#dbe4f0] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8f776b]">
                                   {skillSourceLabel(t, item.source_type)}
                                 </span>
-                                <span className="rounded-full border border-[#ead8cf] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8f776b]">
+                                <span className="rounded-full border border-[#dbe4f0] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8f776b]">
                                   {skillRiskLabel(t, item.skill?.risk_level)}
                                 </span>
                               </div>
@@ -1049,7 +1126,7 @@ const InstanceDetailPage: React.FC = () => {
                 >
                   <div className="space-y-4">
                     {timelineItems.length === 0 ? (
-                      <div className="rounded-[24px] border border-dashed border-[#e7d9d1] bg-[#fffaf7] px-5 py-8 text-sm text-[#7a6d66]">
+                      <div className="rounded-[24px] border border-dashed border-[#e7d9d1] bg-[#f8fbff] px-5 py-8 text-sm text-[#7a6d66]">
                         {t("instances.noRuntimeActivity")}
                       </div>
                     ) : (
@@ -1059,7 +1136,7 @@ const InstanceDetailPage: React.FC = () => {
                           ref={(node) => {
                             timelineItemRefs.current[item.id] = node;
                           }}
-                          className="rounded-[26px] border border-[#efe2d8] bg-[#fffaf7] px-5 py-5 shadow-[0_20px_40px_-36px_rgba(72,44,24,0.42)]"
+                          className="rounded-[26px] border border-[#efe2d8] bg-[#f8fbff] px-5 py-5 shadow-[0_20px_40px_-36px_rgba(30,64,175,0.42)]"
                         >
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
@@ -1070,7 +1147,7 @@ const InstanceDetailPage: React.FC = () => {
                                 <p className="text-base font-semibold text-[#1d1713]">
                                   {item.title}
                                 </p>
-                                <span className="rounded-full border border-[#ead8cf] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8f776b]">
+                                <span className="rounded-full border border-[#dbe4f0] bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#8f776b]">
                                   {item.section}
                                 </span>
                               </div>
@@ -1088,7 +1165,7 @@ const InstanceDetailPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="rounded-[24px] border border-[#efe2d8] bg-[#fffaf7] px-3 py-4">
+                <div className="rounded-[24px] border border-[#efe2d8] bg-[#f8fbff] px-3 py-4">
                   <p className="text-center text-[11px] font-semibold uppercase tracking-[0.18em] text-[#b09d93]">
                     {t("instances.minimap")}
                   </p>
@@ -1124,7 +1201,7 @@ const InstanceDetailPage: React.FC = () => {
             <section className="app-panel-warm px-5 py-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#b46c50]">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#2563eb]">
                     {t("instances.runtimeSummary")}
                   </p>
                   <h2 className="mt-2 text-[1.55rem] font-semibold tracking-[-0.04em] text-[#1d1713]">
@@ -1171,7 +1248,7 @@ const InstanceDetailPage: React.FC = () => {
                 />
               </div>
 
-              <div className="mt-5 rounded-[24px] border border-[#ead8cf] bg-white/82 p-4">
+              <div className="mt-5 rounded-[24px] border border-[#dbe4f0] bg-white/82 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge
                     label={t("instances.agentStatusLabel", { status: agent?.status || runtime?.agent_status || "offline" })}
@@ -1216,7 +1293,7 @@ const InstanceDetailPage: React.FC = () => {
 
 function SummaryMetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[20px] border border-[#ead8cf] bg-white/82 px-4 py-3.5">
+    <div className="rounded-[20px] border border-[#dbe4f0] bg-white/82 px-4 py-3.5">
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#b09d93]">
         {label}
       </p>
@@ -1229,7 +1306,7 @@ function SummaryMetricCard({ label, value }: { label: string; value: string }) {
 
 function CurveMetricCard({ metric }: { metric: MetricCurve }) {
   return (
-    <div className="overflow-hidden rounded-[22px] border border-[#ead8cf] bg-white/84 shadow-[0_16px_34px_-28px_rgba(72,44,24,0.3)]">
+    <div className="overflow-hidden rounded-[22px] border border-[#dbe4f0] bg-white/84 shadow-[0_16px_34px_-28px_rgba(30,64,175,0.3)]">
       <div className="flex items-start justify-between gap-4 px-4 pb-2.5 pt-3.5">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#b09d93]">
@@ -1497,7 +1574,7 @@ function DetailCard({
   mono?: boolean;
 }) {
   return (
-    <div className="rounded-[22px] border border-[#efe2d8] bg-[#fffaf7] px-4 py-4">
+    <div className="rounded-[22px] border border-[#efe2d8] bg-[#f8fbff] px-4 py-4">
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#b09d93]">
         {label}
       </p>
@@ -1537,7 +1614,7 @@ function RefreshState({ active, label }: { active: boolean; label: string }) {
       className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] transition-colors duration-300 ${
         active
           ? "border-[#d9e8f9] bg-[#f5f9ff] text-[#6581a4]"
-          : "border-[#ead8cf] bg-white/82 text-[#7a6d66]"
+          : "border-[#dbe4f0] bg-white/82 text-[#7a6d66]"
       }`}
     >
       <span

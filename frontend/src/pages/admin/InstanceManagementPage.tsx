@@ -1,8 +1,9 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import AdminLayout from '../../components/AdminLayout';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import { useI18n } from '../../contexts/I18nContext';
 import { instanceService } from '../../services/instanceService';
+import { adminInstanceService } from '../../services/adminInstanceService';
 import { userService } from '../../services/userService';
 import type { Instance } from '../../types/instance';
 import type { User } from '../../types/user';
@@ -19,16 +20,14 @@ const InstanceManagementPage: React.FC = () => {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [pendingDeleteInstance, setPendingDeleteInstance] = useState<Instance | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async (options?: { silent?: boolean }) => {
     try {
-      setLoading(true);
+      if (!options?.silent) {
+        setLoading(true);
+      }
       setError(null);
       const [instancesData, usersData] = await Promise.all([
-        instanceService.getInstances(1, 1000),
+        adminInstanceService.getInstances(1, 1000),
         userService.getUsers(1, 1000),
       ]);
       setInstances(instancesData.instances || []);
@@ -36,9 +35,29 @@ const InstanceManagementPage: React.FC = () => {
     } catch (err: any) {
       setError(err.response?.data?.error || t('admin.failedToLoadInstances'));
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
-  };
+  }, [t]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    if (!instances.some((instance) => instance.status === 'creating' || instance.status === 'deleting')) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadData({ silent: true });
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [instances, loadData]);
 
   const userMap = useMemo(() => {
     return new Map(users.map((user) => [user.id, user.username]));
@@ -201,7 +220,7 @@ const InstanceManagementPage: React.FC = () => {
               ))}
             </select>
             <button
-              onClick={loadData}
+              onClick={() => void loadData()}
               className="app-button-secondary"
             >
               {t('common.refresh')}
@@ -242,7 +261,7 @@ const InstanceManagementPage: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-[#f7efe9]">
                   {filteredInstances.map((instance) => (
-                    <tr key={instance.id} className="hover:bg-[#fffaf7]">
+                    <tr key={instance.id} className="hover:bg-[#f8fbff]">
                       <td className="px-5 py-4 align-top">
                         <div className="font-medium text-[#171212]">{instance.name}</div>
                         <div className="mt-1 text-xs text-[#8f8681]">
@@ -297,21 +316,21 @@ const InstanceManagementPage: React.FC = () => {
                             <button
                               onClick={() => handleAction(instance, 'restart')}
                               disabled={actionLoading === `restart-${instance.id}`}
-                              className="rounded-md bg-[#fff2ea] px-3 py-1.5 text-xs font-medium text-[#ef6b4a] hover:bg-[#fde5db] disabled:opacity-50"
+                              className="rounded-md bg-[#eff6ff] px-3 py-1.5 text-xs font-medium text-[#2563eb] hover:bg-[#dbeafe] disabled:opacity-50"
                             >
                               {t('common.restart')}
                             </button>
                           )}
                           <button
                             onClick={() => handleAction(instance, 'sync')}
-                            disabled={actionLoading === `sync-${instance.id}`}
+                            disabled={actionLoading === `sync-${instance.id}` || instance.status === 'deleting'}
                             className="rounded-md bg-[#f3f0ed] px-3 py-1.5 text-xs font-medium text-[#5f5957] hover:bg-[#ebe3dd] disabled:opacity-50"
                           >
                             {t('common.refresh')}
                           </button>
                           <button
                             onClick={() => setPendingDeleteInstance(instance)}
-                            disabled={actionLoading === `delete-${instance.id}`}
+                            disabled={actionLoading === `delete-${instance.id}` || instance.status === 'deleting'}
                             className="rounded-md bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-100 disabled:opacity-50"
                           >
                             {t('common.delete')}

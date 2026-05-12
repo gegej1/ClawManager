@@ -8,7 +8,7 @@ import type { Instance } from '../../types/instance';
 import { useI18n } from '../../contexts/I18nContext';
 
 type ViewMode = 'list' | 'card';
-type StatusFilter = 'all' | 'running' | 'stopped' | 'creating' | 'error';
+type StatusFilter = 'all' | 'running' | 'stopped' | 'creating' | 'deleting' | 'error';
 
 const INSTANCE_FIELDS_TO_COMPARE: Array<keyof Instance> = [
   'id',
@@ -78,7 +78,7 @@ const InstanceCardItem = React.memo(({
   getTypeIcon,
   t,
 }: InstanceItemProps) => (
-  <div className="app-panel transition-shadow duration-200 hover:shadow-[0_30px_80px_-52px_rgba(72,44,24,0.62)]">
+  <div className="app-panel transition-shadow duration-200 hover:shadow-[0_30px_80px_-52px_rgba(30,64,175,0.62)]">
     <div className="p-6">
       <div className="flex items-start justify-between">
         <div className="flex items-center">
@@ -149,7 +149,7 @@ const InstanceCardItem = React.memo(({
         </Link>
         <button
           onClick={() => onRequestDelete(instance.id)}
-          disabled={deletingIds.includes(instance.id)}
+          disabled={deletingIds.includes(instance.id) || instance.status === 'deleting'}
           className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none disabled:opacity-50"
         >
           {deletingIds.includes(instance.id) ? `${t('common.delete')}...` : t('common.delete')}
@@ -176,7 +176,7 @@ const InstanceListItem = React.memo(({
       <div className="flex-1 min-w-0">
         <div className="flex items-center">
           <span className="text-xl mr-2">{getTypeIcon(instance.type)}</span>
-          <h3 className="text-lg font-medium text-[#dc2626] truncate">
+          <h3 className="text-lg font-medium text-[#2563eb] truncate">
             {instance.name}
           </h3>
           <span className={`ml-3 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(instance.status)}`}>
@@ -223,7 +223,7 @@ const InstanceListItem = React.memo(({
 
         <button
           onClick={() => onRequestDelete(instance.id)}
-          disabled={deletingIds.includes(instance.id)}
+          disabled={deletingIds.includes(instance.id) || instance.status === 'deleting'}
           className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded text-red-700 bg-red-100 hover:bg-red-200 focus:outline-none disabled:opacity-50"
         >
           {deletingIds.includes(instance.id) ? `${t('common.delete')}...` : t('common.delete')}
@@ -269,7 +269,7 @@ const InstanceListPage: React.FC = () => {
   }, [loadInstances]);
 
   useEffect(() => {
-    if (!instances.some((instance) => instance.status === 'creating')) {
+    if (!instances.some((instance) => instance.status === 'creating' || instance.status === 'deleting')) {
       return;
     }
 
@@ -280,7 +280,7 @@ const InstanceListPage: React.FC = () => {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [instances]);
+  }, [instances, loadInstances]);
 
   // Handle WebSocket status updates
   const handleStatusUpdate = useCallback((update: { instance_id: number; status: string; pod_name?: string; pod_ip?: string }) => {
@@ -330,14 +330,19 @@ const InstanceListPage: React.FC = () => {
     try {
       setDeletingIds((prevIds) => [...prevIds, id]);
       await instanceService.deleteInstance(id);
-      setInstances((prevInstances) => prevInstances.filter((instance) => instance.id !== id));
+      setInstances((prevInstances) =>
+        prevInstances.map((instance) =>
+          instance.id === id ? { ...instance, status: 'deleting' } : instance,
+        ),
+      );
       setPendingDeleteId(null);
+      await loadInstances({ silent: true });
     } catch (err: any) {
       alert(err.response?.data?.error || t('instances.failedToDelete'));
     } finally {
       setDeletingIds((prevIds) => prevIds.filter((deletingId) => deletingId !== id));
     }
-  }, [t]);
+  }, [loadInstances, t]);
 
   const handleStart = useCallback(async (id: number) => {
     try {
@@ -375,10 +380,12 @@ const InstanceListPage: React.FC = () => {
         return 'bg-gray-100 text-gray-800';
       case 'creating':
         return 'bg-yellow-100 text-yellow-800';
+      case 'deleting':
+        return 'bg-orange-100 text-orange-800';
       case 'error':
         return 'bg-red-100 text-red-800';
       default:
-        return 'VM';
+        return 'bg-gray-100 text-gray-800';
     }
   };
 
@@ -403,6 +410,13 @@ const InstanceListPage: React.FC = () => {
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
           </svg>
         );
+      case 'deleting':
+        return (
+          <svg className="animate-spin w-3 h-3 mr-1.5 text-orange-600" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+        );
       default:
         return null;
     }
@@ -418,6 +432,8 @@ const InstanceListPage: React.FC = () => {
         return 'CE';
       case 'openclaw':
         return 'OC';
+      case 'hermes':
+        return 'HM';
       default:
         return 'VM';
     }
@@ -516,7 +532,7 @@ const InstanceListPage: React.FC = () => {
           </Link>
           <Link
             to="/portal"
-            className="inline-flex items-center px-4 py-2 rounded-xl border border-[#eadfd8] bg-white text-sm font-medium text-[#5f5957] shadow-sm hover:bg-[#fff8f5]"
+            className="inline-flex items-center px-4 py-2 rounded-xl border border-[#dbe4f0] bg-white text-sm font-medium text-[#5f5957] shadow-sm hover:bg-[#f8fbff]"
           >
             <svg className="mr-2 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L6 20.75V17H4a2 2 0 01-2-2V5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2h-2v3.75L14.25 17h-4.5z" />
@@ -539,7 +555,7 @@ const InstanceListPage: React.FC = () => {
               placeholder={t('instances.searchPlaceholder')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="block w-full sm:w-64 pl-10 pr-3 py-2 border border-[#eadfd8] rounded-xl leading-5 bg-white placeholder-[#9c938e] focus:outline-none focus:placeholder-[#9c938e] focus:ring-1 focus:ring-[#f3d2c2] focus:border-[#ef4444] sm:text-sm"
+              className="block w-full sm:w-64 pl-10 pr-3 py-2 border border-[#dbe4f0] rounded-xl leading-5 bg-white placeholder-[#9c938e] focus:outline-none focus:placeholder-[#9c938e] focus:ring-1 focus:ring-[#93c5fd] focus:border-[#2563eb] sm:text-sm"
             />
           </div>
 
@@ -547,12 +563,13 @@ const InstanceListPage: React.FC = () => {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            className="block w-full sm:w-auto pl-3 pr-10 py-2 text-base border-[#eadfd8] focus:outline-none focus:ring-[#f3d2c2] focus:border-[#ef4444] sm:text-sm rounded-xl"
+            className="block w-full sm:w-auto pl-3 pr-10 py-2 text-base border-[#dbe4f0] focus:outline-none focus:ring-[#93c5fd] focus:border-[#2563eb] sm:text-sm rounded-xl"
           >
             <option value="all">{t('status.all')}</option>
             <option value="running">{t('status.running')}</option>
             <option value="stopped">{t('status.stopped')}</option>
             <option value="creating">{t('status.creating')}</option>
+            <option value="deleting">{t('status.deleting')}</option>
             <option value="error">{t('status.error')}</option>
           </select>
 
@@ -562,8 +579,8 @@ const InstanceListPage: React.FC = () => {
               onClick={() => setViewMode('list')}
               className={`relative inline-flex items-center px-4 py-2 rounded-l-xl border text-sm font-medium focus:outline-none ${
                 viewMode === 'list'
-                  ? 'bg-[#ef4444] text-white border-[#ef4444]'
-                  : 'bg-white text-gray-700 border-[#eadfd8] hover:bg-[#fff8f5]'
+                  ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                  : 'bg-white text-gray-700 border-[#dbe4f0] hover:bg-[#eff6ff]'
               }`}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -574,8 +591,8 @@ const InstanceListPage: React.FC = () => {
               onClick={() => setViewMode('card')}
               className={`relative inline-flex items-center px-4 py-2 rounded-r-xl border text-sm font-medium focus:outline-none ${
                 viewMode === 'card'
-                  ? 'bg-[#ef4444] text-white border-[#ef4444]'
-                  : 'bg-white text-gray-700 border-[#eadfd8] hover:bg-[#fff8f5]'
+                  ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                  : 'bg-white text-gray-700 border-[#dbe4f0] hover:bg-[#eff6ff]'
               }`}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -631,7 +648,7 @@ const InstanceListPage: React.FC = () => {
           <div className="mt-6">
             <Link
               to="/instances/new"
-              className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-xl text-white bg-[#ef4444] hover:bg-[#dc2626]"
+              className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-xl text-white bg-[#2563eb] hover:bg-[#1d4ed8]"
             >
               {t('instances.createInstance')}
             </Link>
